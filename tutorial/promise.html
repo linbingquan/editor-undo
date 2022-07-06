@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+
+  <body>
+    <script>
+      const apiTest = () => {
+        return new Promise(resolve => {
+          setTimeout(() => {
+            resolve();
+          }, 500);
+        });
+      };
+
+      class Editor {
+        constructor() {
+          this.undos = [];
+          this.redos = [];
+          this.disabled = false;
+        }
+        execute(command) {
+          this.undos.push(command);
+
+          try {
+            const executeFn = command.execute();
+            const length = this.redos.length;
+            if (length > 0) this.redos.splice(0, length);
+            // 返回 execute
+            return executeFn;
+          } catch (err) {
+            throw err;
+          }
+        }
+        undo() {
+          if (this.disabled) {
+            console.warn("editor is disabled");
+            return;
+          }
+          let cmd;
+
+          if (this.undos.length > 0) {
+            cmd = this.undos.pop();
+          }
+
+          if (!cmd) {
+            return;
+          }
+
+          // 先禁用撤销功能
+          this.disabled = true;
+
+          const undoFn = cmd.undo();
+          undoFn
+            .then(() => {
+              // 成功 加入撤销队列
+              if (cmd) this.redos.push(cmd);
+            })
+            .catch(() => {
+              // 失败 放回重做队列
+              if (cmd) this.undos.push(cmd);
+            })
+            .finally(() => {
+              // 最后不禁用撤销功能
+              this.disabled = false;
+            });
+
+          return undoFn;
+        }
+        redo() {
+          if (this.disabled) {
+            console.warn("editor is disabled");
+            return;
+          }
+          let cmd;
+
+          if (this.redos.length > 0) {
+            cmd = this.redos.pop();
+          }
+
+          if (!cmd) {
+            return;
+          }
+
+          // 先禁用撤销功能
+          this.disabled = true;
+
+          const executeFn = cmd.execute();
+
+          executeFn
+            .then(() => {
+              // 成功 加入重做队列
+              if (cmd) this.undos.push(cmd);
+            })
+            .catch(() => {
+              // 失败 放回撤销队列
+              if (cmd) this.redos.push(cmd);
+            })
+            .finally(() => {
+              // 最后不禁用撤销功能
+              this.disabled = false;
+            });
+
+          return executeFn;
+        }
+      }
+
+      class CommandA {
+        execute() {
+          // 功能A执行的代码
+          log("执行功能A");
+          return apiTest()
+        }
+        undo() {
+          // 撤销方法的代码
+          log('撤销功能A');
+          return apiTest()
+        }
+      }
+
+      const editor = new Editor();
+      editor.execute(new CommandA());
+
+      // 注册 keydown 事件
+      document.addEventListener('keydown', evt => {
+        const { code, ctrlKey, shiftKey } = evt;
+        switch (code) {
+          case 'KeyZ':
+            if (ctrlKey) {
+              if (shiftKey) {
+                editor.redo();
+              } else {
+                editor.undo();
+              }
+            }
+            break;
+
+          default:
+            break;
+        }
+      });
+
+      function log(str) {
+        const div = document.createElement('div');
+        div.innerText = str;
+        document.body.appendChild(div);
+        console.log(str);
+      }
+    </script>
+  </body>
+</html>

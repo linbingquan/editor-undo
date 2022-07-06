@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+
+  <body>
+    <script>
+      class Editor {
+        constructor() {
+          this.undos = [];
+          this.redos = [];
+        }
+        execute(command) {
+          this.undos.push(command);
+          command.execute();
+          const length = this.redos.length;
+          if (length > 0) this.redos.splice(0, length);
+        }
+        undo() {
+          const cmd = this.undos.pop();
+          if (cmd) {
+            cmd.undo();
+            this.redos.push(cmd);
+          }
+        }
+        redo() {
+          const cmd = this.redos.pop();
+          if (cmd) {
+            cmd.execute();
+            this.undos.push(cmd);
+          }
+        }
+      }
+
+      class CommandA {
+        execute() {
+          // 功能A执行的代码
+          log("执行功能A");
+        }
+        undo() {
+          // 撤销方法的代码
+          log("撤销功能A");
+        }
+      }
+
+      const editor = new Editor();
+      editor.execute(new CommandA());
+
+      // 注册 keydown 事件
+      document.addEventListener("keydown", (evt) => {
+        const { code, ctrlKey, shiftKey } = evt;
+        switch (code) {
+          case "KeyZ":
+            if (ctrlKey) {
+              if (shiftKey) {
+                editor.redo();
+              } else {
+                editor.undo();
+              }
+            }
+            break;
+
+          default:
+            break;
+        }
+      });
+
+      function log(str) {
+        const div = document.createElement('div');
+        div.innerText = str;
+        document.body.appendChild(div);
+        console.log(str);
+      }
+    </script>
+  </body>
+</html>

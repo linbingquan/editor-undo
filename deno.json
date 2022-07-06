@@ -1,0 +1,6 @@
+{
+  "tasks": {
+    "build": "deno bundle mod.ts ./dist/editor.js && deno bundle mod.ts ./dist/editor.mjs && deno task release",
+    "release": "deno run --allow-read --allow-write scripts/release.ts"
+  }
+}

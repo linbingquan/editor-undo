@@ -1,0 +1,413 @@
+<script src="https://unpkg.com/vue@2"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/todomvc-app-css@2.2.0/index.css">
+<script src="../dist/editor.js"></script>
+<style>
+  .toolbar .button + .button {
+    margin-left: 35px;
+  }
+  .toolbar .button[disabled] {
+    opacity: 0.3;
+  }
+</style>
+
+<div id="app">
+  <section class="todoapp">
+    <header class="header">
+      <h1>todos</h1>
+      <input
+        class="new-todo"
+        autofocus
+        autocomplete="off"
+        placeholder="What needs to be done?"
+        v-model="newTodo"
+        @keyup.enter="addTodo"
+        @focus="isFoucsInput = true"
+        @blur="isFoucsInput = false"
+      />
+    </header>
+    <section class="main" v-show="todos.length" v-cloak>
+      <input
+        id="toggle-all"
+        class="toggle-all"
+        type="checkbox"
+        v-model="allDone"
+      />
+      <label for="toggle-all"></label>
+      <ul class="todo-list">
+        <li
+          v-for="todo in filteredTodos"
+          class="todo"
+          :key="todo.id"
+          :class="{ completed: todo.completed, editing: todo == editedTodo }"
+        >
+          <div class="view">
+            <input class="toggle" type="checkbox" :checked="todo.completed" @change="(evt) => toggleCompleted(evt, todo)" />
+            <label @dblclick="editTodo(todo)">{{ todo.title }}</label>
+            <button class="destroy" @click="removeTodo(todo)"></button>
+          </div>
+          <input
+            class="edit"
+            type="text"
+            v-model="todo.title"
+            v-todo-focus="todo == editedTodo"
+            @blur="doneEdit(todo)"
+            @keyup.enter="doneEdit(todo)"
+            @keyup.esc="cancelEdit(todo)"
+          />
+        </li>
+      </ul>
+    </section>
+    <footer class="footer" v-show="todos.length" v-cloak>
+      <span class="todo-count">
+        <strong>{{ remaining }}</strong> {{ remaining | pluralize }} left
+      </span>
+      <ul class="filters">
+        <li><a href="#/all" :class="{ selected: visibility == 'all' }">All</a></li>
+        <li><a href="#/active" :class="{ selected: visibility == 'active' }">Active</a></li>
+        <li><a href="#/completed" :class="{ selected: visibility == 'completed' }">Completed</a></li>
+      </ul>
+      <button class="clear-completed" @click="removeCompleted" v-show="todos.length > remaining">
+        Clear completed
+      </button>
+    </footer>
+  </section>
+  <div class="toolbar">
+    <button class="button" type="button" @click="undo" :disabled="undos.length === 0">👈撤销</button>
+    <button class="button" type="button" @click="redo" :disabled="redos.length === 0">重做👉</button>
+  </div>
+</div>
+
+<script>
+  // Full spec-compliant TodoMVC with localStorage persistence
+  // and hash-based routing in ~120 effective lines of JavaScript.
+
+  // localStorage persistence
+  var STORAGE_KEY = "todos-vuejs-2.0";
+  var todoStorage = {
+    fetch: function() {
+      var todos = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      todos.forEach(function(todo, index) {
+        todo.id = index;
+      });
+      todoStorage.uid = todos.length;
+      return todos;
+    },
+    save: function(todos) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
+    }
+  };
+
+  // visibility filters
+  var filters = {
+    all: function(todos) {
+      return todos;
+    },
+    active: function(todos) {
+      return todos.filter(function(todo) {
+        return !todo.completed;
+      });
+    },
+    completed: function(todos) {
+      return todos.filter(function(todo) {
+        return todo.completed;
+      });
+    }
+  };
+
+  const editor = new Editor();
+
+  const data = {
+    todos: todoStorage.fetch(),
+    undos: editor.undos,
+    redos: editor.redos,
+    newTodo: "",
+    editedTodo: null,
+    visibility: "all",
+    isFoucsInput: false
+  };
+
+  document.addEventListener('keydown', evt => {
+    const { code, ctrlKey, shiftKey } = evt;
+    switch (code) {
+      case 'KeyZ':
+        if (ctrlKey) {
+          if (shiftKey) {
+            if (data.isFoucsInput === false) {
+              evt.preventDefault();
+              editor.redo();
+            }
+          } else {
+            if (data.isFoucsInput === false) {
+              evt.preventDefault();
+              editor.undo();
+            }
+          }
+        }
+        break;
+
+      default:
+        break;
+    }
+  });
+
+  class AddTodoCommand extends Command {
+    constructor(todo) {
+      super();
+      this.todo = todo;
+    }
+    execute() {
+      return new Promise(resolve => {
+        data.todos.push(this.todo);
+        resolve();
+      });
+    }
+    undo() {
+      return new Promise(resolve => {
+        data.todos.splice(
+          data.todos.findIndex(item => item.id === this.todo.id),
+          1,
+        );
+        resolve();
+      });
+    }
+  }
+
+  class RemoveTodoCommand extends Command {
+    constructor(todo) {
+      super();
+      this.todo = todo;
+    }
+    execute() {
+      return new Promise(resolve => {
+        const index = data.todos.findIndex(item => item.id === this.todo.id);
+        this.index = index;
+        data.todos.splice(index, 1);
+        resolve();
+      });
+    }
+    undo() {
+      return new Promise(resolve => {
+        data.todos.splice(this.index, 0, this.todo);
+        resolve();
+      });
+    }
+  }
+
+  class EditTodoCommand extends Command {
+    constructor(todo, oldTitle) {
+      super();
+      this.todo = todo;
+      this.newTitle = todo.title;
+      this.oldTitle = oldTitle;
+    }
+    execute() {
+      return new Promise(resolve => {
+        this.todo.title = this.newTitle.trim();
+        resolve();
+      });
+    }
+    undo() {
+      return new Promise(resolve => {
+        this.todo.title = this.oldTitle.trim();
+        resolve();
+      });
+    }
+  }
+
+  class ToggleCompletedCommand extends Command {
+    constructor(todo, checked) {
+      super();
+      this.todo = todo;
+      this.checked = checked;
+    }
+    execute() {
+      return new Promise(resolve => {
+        this.todo.completed = this.checked;
+        resolve();
+      });
+    }
+    undo() {
+      return new Promise(resolve => {
+        this.todo.completed = !this.checked;
+        resolve();
+      });
+    }
+  }
+
+  class RemoveCompletedCommand extends Command {
+    constructor(todos) {
+      super();
+      this.todos = JSON.parse(JSON.stringify(todos));
+    }
+    execute() {
+      return new Promise(resolve => {
+        data.todos = filters.active(data.todos);
+        resolve();
+      });
+    }
+    undo() {
+      return new Promise(resolve => {
+        data.todos = JSON.parse(JSON.stringify(this.todos));
+        resolve();
+      });
+    }
+  }
+
+  class AllDoneCommand extends Command {
+    constructor(checked) {
+      super();
+      this.checked = checked;
+      this.map = {};
+    }
+    execute() {
+      return new Promise(resolve => {
+        data.todos.forEach(todo => {
+          this.map[todo.id] = todo.completed;
+          todo.completed = this.checked;
+        });
+        resolve();
+      });
+    }
+    undo() {
+      return new Promise(resolve => {
+        data.todos.forEach(todo => {
+          const checked = this.map[todo.id];
+          todo.completed = checked;
+        });
+        resolve();
+      });
+    }
+  }
+
+  // app Vue instance
+  var app = new Vue({
+    // app initial state
+    data: data,
+
+    // watch todos change for localStorage persistence
+    watch: {
+      todos: {
+        handler: function(todos) {
+          todoStorage.save(todos);
+        },
+        deep: true
+      }
+    },
+
+    // computed properties
+    // http://vuejs.org/guide/computed.html
+    computed: {
+      filteredTodos: function() {
+        return filters[this.visibility](this.todos);
+      },
+      remaining: function() {
+        return filters.active(this.todos).length;
+      },
+      allDone: {
+        get: function() {
+          return this.remaining === 0;
+        },
+        set: function(value) {
+          editor.execute(new AllDoneCommand(value));
+        }
+      }
+    },
+
+    filters: {
+      pluralize: function(n) {
+        return n === 1 ? "item" : "items";
+      }
+    },
+
+    // methods that implement data logic.
+    // note there's no DOM manipulation here at all.
+    methods: {
+      addTodo: function() {
+        const value = this.newTodo && this.newTodo.trim();
+        if (!value) {
+          return;
+        }
+        const id = todoStorage.uid++;
+        const todo = {
+          id: id,
+          title: value,
+          completed: false,
+        };
+        editor.execute(new AddTodoCommand(todo)).then(() => {
+          this.newTodo = '';
+        });
+      },
+
+      removeTodo: function(todo) {
+        editor.execute(new RemoveTodoCommand(todo));
+      },
+
+      editTodo: function(todo) {
+        this.beforeEditCache = todo.title;
+        this.editedTodo = todo;
+      },
+
+      doneEdit: function(todo) {
+        if (!this.editedTodo) {
+          return;
+        }
+        if (!todo.title) {
+          this.removeTodo(todo);
+        } else {
+          editor.execute(new EditTodoCommand(todo, this.beforeEditCache));
+        }
+        this.editedTodo = null;
+      },
+
+      cancelEdit: function(todo) {
+        this.editedTodo = null;
+        todo.title = this.beforeEditCache;
+      },
+
+      removeCompleted: function() {
+        editor.execute(new RemoveCompletedCommand(this.todos));
+      },
+
+      toggleCompleted: function (evt, todo) {
+        const { checked } = evt.target;
+        editor.execute(new ToggleCompletedCommand(todo, checked));
+      },
+      
+      undo: function () {
+        editor.undo();
+      },
+
+      redo: function () {
+        editor.redo();
+      }
+    },
+
+    // a custom directive to wait for the DOM to be updated
+    // before focusing on the input field.
+    // http://vuejs.org/guide/custom-directive.html
+    directives: {
+      "todo-focus": function(el, binding) {
+        if (binding.value) {
+          el.focus();
+        }
+      }
+    }
+  });
+
+  // handle routing
+  function onHashChange() {
+    var visibility = window.location.hash.replace(/#\/?/, "");
+    if (filters[visibility]) {
+      app.visibility = visibility;
+    } else {
+      window.location.hash = "";
+      app.visibility = "all";
+    }
+  }
+
+  window.addEventListener("hashchange", onHashChange);
+  onHashChange();
+
+  // mount
+  app.$mount("#app");
+</script>

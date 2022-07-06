@@ -1,0 +1,392 @@
+<script src="https://unpkg.com/vue@next"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/todomvc-app-css@2.2.0/index.css">
+<script src="../dist/editor.js"></script>
+<style>
+  .toolbar .button + .button {
+    margin-left: 35px;
+  }
+  .toolbar .button[disabled] {
+    opacity: 0.3;
+  }
+</style>
+
+<div id="app">
+  <section class="todoapp">
+    <header class="header">
+      <h1>todos</h1>
+      <input class="new-todo"
+              autofocus autocomplete="off"
+              placeholder="What needs to be done?"
+              v-model="state.newTodo"
+              @focus="state.isFoucsInput = true"
+              @blur="state.isFoucsInput = false"
+              @keyup.enter="addTodo" >
+    </header>
+    <section class="main" v-show="state.todos.length">
+      <input id="toggle-all" class="toggle-all" type="checkbox" v-model="state.allDone">
+      <label for="toggle-all">Mark all as complete</label>
+      <ul class="todo-list">
+        <li v-for="todo in state.filteredTodos"
+            class="todo"
+            :key="todo.id"
+            :class="{ completed: todo.completed, editing: todo === state.editedTodo }">
+          <div class="view">
+            <input class="toggle" type="checkbox" :checked="todo.completed" @change="(evt) => toggleCompleted(evt, todo)">
+            <label @dblclick="editTodo(todo)">{{ todo.title }}</label>
+            <button class="destroy" @click="removeTodo(todo)"></button>
+          </div>
+          <input class="edit" type="text"
+                  v-model="todo.title"
+                  v-todo-focus="todo === state.editedTodo"
+                  @blur="doneEdit(todo)"
+                  @keyup.enter="doneEdit(todo)"
+                  @keyup.escape="cancelEdit(todo)" >
+        </li>
+      </ul>
+    </section>
+    <footer class="footer" v-show="state.todos.length">
+      <span class="todo-count">
+        <strong>{{ state.remaining }}</strong>
+        <span>{{ state.remainingText }}</span>
+      </span>
+      <ul class="filters">
+        <li><a href="#/all" :class="{ selected: state.visibility === 'all' }">All</a></li>
+        <li><a href="#/active" :class="{ selected: state.visibility === 'active' }">Active</a></li>
+        <li><a href="#/completed" :class="{ selected: state.visibility === 'completed' }">Completed</a></li>
+      </ul>
+      <button class="clear-completed" @click="removeCompleted" v-show="state.todos.length > state.remaining">
+        Clear completed
+      </button>
+    </footer>
+  </section>
+  <div class="toolbar">
+    <button class="button" type="button" @click="undo" :disabled="state.undos.length === 0">👈撤销</button>
+    <button class="button" type="button" @click="redo" :disabled="state.redos.length === 0">重做👉</button>
+  </div>
+</div>
+
+<script>
+const { createApp, reactive, computed, watchEffect, onMounted, onUnmounted } = Vue
+
+const STORAGE_KEY = 'todos-vuejs-3.x'
+const todoStorage = {
+  fetch () {
+    const todos = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
+    todos.forEach((todo, index) => {
+      todo.id = index
+    })
+    todoStorage.uid = todos.length
+    return todos
+  },
+  save (todos) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(todos))
+  }
+}
+
+const filters = {
+  all (todos) {
+    return todos
+  },
+  active (todos) {
+    return todos.filter((todo) => {
+      return !todo.completed
+    })
+  },
+  completed (todos) {
+    return todos.filter(function (todo) {
+      return todo.completed
+    })
+  }
+}
+
+function pluralize (n) {
+  return n === 1 ? 'item' : 'items'
+}
+
+const editor = new Editor();
+
+document.addEventListener('keydown', evt => {
+  const { code, ctrlKey, shiftKey } = evt;
+  switch (code) {
+    case 'KeyZ':
+      if (ctrlKey) {
+        if (shiftKey) {
+          if (state.isFoucsInput === false) {
+            evt.preventDefault();
+            editor.redo();
+          }
+        } else {
+          if (state.isFoucsInput === false) {
+            evt.preventDefault();
+            editor.undo();
+          }
+        }
+      }
+      break;
+
+    default:
+      break;
+  }
+});
+
+class AddTodoCommand extends Command {
+  constructor(todo) {
+    super();
+    this.todo = todo;
+  }
+  execute() {
+    return new Promise((resolve) => {
+      state.todos.push(this.todo);
+      resolve()
+    })
+  }
+  undo() {
+    return new Promise((resolve) => {
+      state.todos.splice(state.todos.findIndex(item => item.id === this.todo.id), 1);
+      resolve()
+    })
+  }
+}
+
+class RemoveTodoCommand extends Command {
+  constructor(todo) {
+    super();
+    this.todo = todo;
+  }
+  execute() {
+    return new Promise((resolve) => {
+      const index = state.todos.findIndex(item => item.id === this.todo.id);
+      this.index = index;
+      state.todos.splice(index, 1);
+      resolve()
+    })
+  }
+  undo() {
+    return new Promise((resolve) => {
+      state.todos.splice(this.index, 0, this.todo);
+      resolve()
+    })
+  }
+}
+
+class EditTodoCommand extends Command {
+  constructor(todo, oldTitle) {
+    super();
+    this.todo = todo;
+    this.newTitle = todo.title;
+    this.oldTitle = oldTitle;
+  }
+  execute() {
+    return new Promise((resolve) => {
+      this.todo.title = this.newTitle.trim();
+      resolve()
+    })
+  }
+  undo() {
+    return new Promise((resolve) => {
+      this.todo.title = this.oldTitle.trim();
+      resolve()
+    })
+  }
+}
+
+class RemoveCompletedCommand extends Command {
+  constructor(todos) {
+    super();
+    this.todos = JSON.parse(JSON.stringify(todos));
+  }
+  execute() {
+    return new Promise(resolve => {
+      state.todos = filters.active(state.todos);
+      resolve();
+    });
+  }
+  undo() {
+    return new Promise(resolve => {
+      state.todos = JSON.parse(JSON.stringify(this.todos));
+      resolve();
+    });
+  }
+}
+
+class ToggleCompletedCommand extends Command {
+  constructor(todo, checked) {
+    super();
+    this.todo = todo;
+    this.checked = checked;
+  }
+  execute() {
+    return new Promise((resolve) => {
+      this.todo.completed = this.checked;
+      resolve()
+    })
+  }
+  undo() {
+    return new Promise((resolve) => {
+      this.todo.completed = !this.checked;
+      resolve()
+    })
+  }
+}
+
+class AllDoneCommand extends Command {
+  constructor(checked) {
+    super();
+    this.checked = checked;
+    this.map = {};
+  }
+  execute() {
+    return new Promise((resolve) => {
+      state.todos.forEach((todo) => {
+        this.map[todo.id] = todo.completed;
+        todo.completed = this.checked;
+      })
+      resolve()
+    })
+  }
+  undo() {
+    return new Promise((resolve) => {
+      state.todos.forEach((todo) => {
+        const checked = this.map[todo.id];
+        todo.completed = checked;
+      })
+      resolve()
+    })
+  }
+}
+
+const state = reactive({
+  todos: todoStorage.fetch(),
+  isFoucsInput: false,
+  undos: editor.undos,
+  redos: editor.redos,
+  editedTodo: null,
+  newTodo: '',
+  beforeEditCache: '',
+  visibility: 'all',
+  remaining: computed(() => {
+    return filters.active(state.todos).length
+  }),
+  remainingText: computed(() => {
+    return ` ${pluralize(state.remaining)} left`
+  }),
+  filteredTodos: computed(() => {
+    return filters[state.visibility](state.todos)
+  }),
+  allDone: computed({
+    get: function () {
+      return state.remaining === 0
+    },
+    set: function (value) {
+      editor.execute(new AllDoneCommand(value))
+    }
+  })
+})
+
+createApp({
+  setup () {
+    watchEffect(() => {
+      todoStorage.save(state.todos)
+    })
+
+    onMounted(() => {
+      window.addEventListener('hashchange', onHashChange)
+      onHashChange()
+    })
+
+    onUnmounted(() => {
+      window.removeEventListener('hashchange', onHashChange)
+    })
+
+    function onHashChange () {
+      const visibility = window.location.hash.replace(/#\/?/, '')
+      if (filters[visibility]) {
+        state.visibility = visibility
+      } else {
+        window.location.hash = ''
+        state.visibility = 'all'
+      }
+    }
+
+    function addTodo () {
+      const value = state.newTodo && state.newTodo.trim()
+      if (!value) {
+        return
+      }
+      const id = todoStorage.uid++;
+      const todo = {
+        id: id,
+        title: value,
+        completed: false
+      }
+      editor.execute(new AddTodoCommand(todo)).then(() => {
+        state.newTodo = '';
+      });
+    }
+
+    function removeTodo (todo) {
+      editor.execute(new RemoveTodoCommand(todo));
+    }
+
+    function editTodo (todo) {
+      state.beforeEditCache = todo.title
+      state.editedTodo = todo
+    }
+
+    function doneEdit (todo) {
+      if (!state.editedTodo) {
+        return
+      }
+      if (!todo.title) {
+        removeTodo(todo)
+      } else {
+        editor.execute(new EditTodoCommand(todo, state.beforeEditCache));
+      }
+      state.editedTodo = null;
+    }
+
+    function cancelEdit (todo) {
+      state.editedTodo = null
+      todo.title = state.beforeEditCache
+    }
+
+    function removeCompleted () {
+      editor.execute(new RemoveCompletedCommand(state.todos));
+    }
+
+    function toggleCompleted(evt, todo) {
+      const { checked } = evt.target;
+      editor.execute(new ToggleCompletedCommand(todo, checked));
+    }
+
+    function undo() {
+      editor.undo();
+    }
+
+    function redo() {
+      editor.redo();
+    }
+
+    return {
+      state,
+      addTodo,
+      removeTodo,
+      editTodo,
+      doneEdit,
+      cancelEdit,
+      removeCompleted,
+      toggleCompleted,
+      undo,
+      redo,
+    }
+  },
+
+  directives: {
+    'todo-focus': (el, { value }) => {
+      if (value) {
+        el.focus()
+      }
+    }
+  }
+}).mount('#app')
+</script>
